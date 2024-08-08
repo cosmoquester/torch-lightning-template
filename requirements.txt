@@ -1,4 +1,5 @@
 torch
-pytorch-lightning
+lightning
+tensorboard
 
 # wandb
