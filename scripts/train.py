@@ -1,10 +1,10 @@
 import argparse
 import os
 
-import pytorch_lightning as pl
+import lightning as pl
 import torch
-from pytorch_lightning.callbacks import LearningRateMonitor
-from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from torch.utils.data import DataLoader
 
 from sample_package.data import SampleDataset
@@ -28,9 +28,7 @@ g.add_argument("--epochs", type=int, default=10, help="the number of training ep
 g.add_argument("--max-learning-rate", type=float, default=2e-4, help="max learning rate")
 g.add_argument("--min-learning-rate", type=float, default=1e-5, help="min Learning rate")
 g.add_argument("--warmup-rate", type=float, default=0.05, help="warmup step rate")
-g.add_argument("--gpus", type=int, default=0, help="the number of gpus")
 g.add_argument("--logging-interval", type=int, default=10, help="logging interval")
-g.add_argument("--evaluate-interval", type=int, default=50, help="validation interval")
 g.add_argument("--seed", type=int, default=42, help="random seed")
 
 g = parser.add_argument_group("Wandb Options")
@@ -53,8 +51,6 @@ def main(args: argparse.Namespace):
     logger.info(f"[+] Set Random Seed to {args.seed}")
     pl.seed_everything(args.seed)
 
-    logger.info(f"[+] GPU: {args.gpus}")
-
     logger.info(f'[+] Load Train Dataset from "{args.train_dataset_pattern}"')
     train_dataset = SampleDataset(args.input_dimension, args.num_classes)
     logger.info(f'[+] Load Valid Dataset from "{args.valid_dataset_pattern}"')
@@ -65,8 +61,6 @@ def main(args: argparse.Namespace):
 
     total_steps = len(train_dataloader) * args.epochs
 
-    model_dir = os.path.join(args.output_dir, "models")
-    os.makedirs(model_dir)
     classification = SimpleClassification(
         input_dimension=args.input_dimension,
         num_classes=args.num_classes,
@@ -74,7 +68,6 @@ def main(args: argparse.Namespace):
         max_learning_rate=args.max_learning_rate,
         min_learning_rate=args.min_learning_rate,
         warmup_rate=args.warmup_rate,
-        model_save_dir=model_dir,
     )
 
     if args.pretrained_model_path:
@@ -82,7 +75,7 @@ def main(args: argparse.Namespace):
         classification.model.load_state_dict(torch.load(args.pretrained_model_path))
 
     logger.info(f"[+] Start Training")
-    train_loggers = [TensorBoardLogger(args.output_dir, "", "logs")]
+    train_loggers = [TensorBoardLogger(args.output_dir, "logs")]
     if args.wandb_project:
         train_loggers.append(
             WandbLogger(
@@ -93,13 +86,18 @@ def main(args: argparse.Namespace):
             )
         )
     trainer = pl.Trainer(
+        default_root_dir=args.output_dir,
         logger=train_loggers,
         max_epochs=args.epochs,
         log_every_n_steps=args.logging_interval,
-        val_check_interval=args.evaluate_interval,
         accumulate_grad_batches=args.accumulate_grad_batches,
-        callbacks=[LearningRateMonitor(logging_interval="step")],
-        gpus=args.gpus,
+        callbacks=[
+            ModelCheckpoint(monitor="val/loss", save_last=True, save_weights_only=True),
+            LearningRateMonitor(logging_interval="step"),
+        ],
+        accelerator="auto",
+        devices="auto",
+        strategy="auto",
     )
     trainer.fit(classification, train_dataloader, valid_dataloader)
 
