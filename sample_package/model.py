@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Tuple
 
 import lightning as pl
 import torch
@@ -139,8 +139,25 @@ class SimpleClassification(pl.LightningModule):
 
         return metrics
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(params=self.model.parameters(), lr=self.max_learning_rate)
+    def configure_optimizers(
+        self, skip_list: Tuple[str] = ("LayerNorm", "layer_norm", "layernorm")
+    ) -> Dict[str, object]:
+        decay = []
+        no_decay = []
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            for skip_name in skip_list:
+                if skip_name in name:
+                    no_decay.append(param)
+                    break
+            else:
+                decay.append(param)
+
+        optimizer = torch.optim.AdamW(
+            params=[{"params": no_decay, "weight_decay": 0.0}, {"params": decay}], lr=self.max_learning_rate
+        )
         scheduler = LinearWarmupLR(
             optimizer,
             int(self.total_steps * self.warmup_rate),
