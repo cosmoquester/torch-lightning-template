@@ -21,8 +21,8 @@ g.add_argument("--valid-dataset-pattern", type=str, help="glob pattern of valid 
 g.add_argument("--input-dimension", type=int, default=128, help="model input dimension")
 g.add_argument("--num-classes", type=int, default=2, help="model input dimension")
 g.add_argument("--pretrained-model-path", type=str, help="pretrained model path")
-g.add_argument("--batch-size", type=int, default=128, help="training batch size")
-g.add_argument("--valid-batch-size", type=int, default=256, help="validation batch size")
+g.add_argument("--batch-size", type=int, default=128, help="training batch size per device")
+g.add_argument("--valid-batch-size", type=int, default=256, help="validation batch size per device")
 g.add_argument("--accumulate-grad-batches", type=int, default=1, help="the number of gradident accumulation steps")
 g.add_argument("--epochs", type=int, default=10, help="the number of training epochs")
 g.add_argument("--max-learning-rate", type=float, default=2e-4, help="max learning rate")
@@ -30,6 +30,7 @@ g.add_argument("--min-learning-rate", type=float, default=1e-5, help="min Learni
 g.add_argument("--warmup-rate", type=float, default=0.05, help="warmup step rate")
 g.add_argument("--logging-interval", type=int, default=10, help="logging interval")
 g.add_argument("--seed", type=int, default=42, help="random seed")
+g.add_argument("--gpus", type=int, help="the number of gpus, use all devices by default")
 
 g = parser.add_argument_group("Wandb Options")
 g.add_argument("--wandb-run-name", type=str, help="wanDB run name")
@@ -41,7 +42,7 @@ g.add_argument("--wandb-project", type=str, help="wanDB project name")
 def main(args: argparse.Namespace):
     logger = get_logger("train")
 
-    os.makedirs(args.output_dir)
+    os.makedirs(args.output_dir, exist_ok=True)
     logger.info(f'[+] Save output to "{args.output_dir}"')
 
     logger.info(" ====== Arguements ======")
@@ -59,7 +60,11 @@ def main(args: argparse.Namespace):
     train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size)
     valid_dataloader = DataLoader(valid_dataset, batch_size=args.valid_batch_size)
 
-    total_steps = len(train_dataloader) * args.epochs
+    if args.gpus is None:
+        args.gpus = torch.cuda.device_count()
+    num_parallels = max(args.gpus, 1)
+    logger.info(f"[+] GPUs: {num_parallels}")
+    total_steps = len(train_dataloader) * args.epochs // args.accumulate_grad_batches // num_parallels
 
     classification = SimpleClassification(
         input_dimension=args.input_dimension,
@@ -95,9 +100,9 @@ def main(args: argparse.Namespace):
             ModelCheckpoint(monitor="val/loss", save_last=True, save_weights_only=True),
             LearningRateMonitor(logging_interval="step"),
         ],
-        accelerator="auto",
-        devices="auto",
         strategy="auto",
+        accelerator="auto",
+        devices=num_parallels,
     )
     trainer.fit(classification, train_dataloader, valid_dataloader)
 
